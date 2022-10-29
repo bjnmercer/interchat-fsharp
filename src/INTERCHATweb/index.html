@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <script src="jquery-3.2.1.min.js"></script>
+        <script src="jquery-ui.js"></script>
+        <link href="jquery-ui.css" rel="stylesheet">
+        <link href="index.css" rel="stylesheet">
+        <script>            
+
+            var ws = new WebSocket("ws://127.0.0.1:1900");
+
+            function createAudio(name) {
+                var audio = new Audio();                
+                audio.src = name;                
+                audio.play();
+                audio.pause();
+                return audio;
+            }
+
+            var fart = {};
+            var beep1 = {};
+            var beep2 = {};
+            var horn = {};
+            var scream = {};
+
+            function getAudio() {
+                var noise = $('input[name="noise"]:checked').val();
+                switch (noise) {
+                    case "beep1":
+                        return beep1;
+                    case "beep2":
+                        return beep2;
+                    case "horn":
+                        return horn;
+                    case "fart":
+                        return fart;
+                    case "scream":
+                        return scream;
+                }
+            }
+
+            var conversations = [];
+                                          
+            ws.onerror = function(){
+                $('#serverError').text('WebSocket Status: Error');
+            };
+
+            ws.onabort = function() {
+                $('#serverStatus').text('WebSocket Status: Abort');
+            };
+
+            ws.onopen = function() { 
+                $('#serverStatus').text('WebSocket Status: Socket Open');
+            };
+
+            ws.onclose = function (ev) {
+                $('#serverStatus').text('WebSocket Status: Socket Closed (' + ev.code + ')');
+            };
+
+            var loginCalled = false;
+            var loginHandle = "";
+
+            function OK(fields)
+            {
+                if (loginCalled) {
+                    loginCalled = false;
+                    var request = { Case :"GetUserList"};
+                    ws.send(JSON.stringify(request))
+                }
+            }
+
+            function addUser(handle) {
+                return $('<li id="user-' + handle + '"/>').append('<a href="#" onclick="openConversation(\'' + handle + '\')">' + handle + '</a>')
+            }
+
+            function Data(fields)
+            {
+                var dataType = fields[0].Case
+                if (dataType === "ThisGuy") {
+                    alert("This guy...")
+                }
+                else {
+                    var handles = fields[0].Fields[0]
+                        .map(function (v) { return v.handle; });
+                        //.filter(function (h) { return h != loginHandle})
+                    var cList = $('#user-list');
+                    cList.empty();
+                    $.each(handles, function (index) {
+                        addUser(handles[index]).appendTo(cList);
+                    });
+                }
+
+            }
+
+            function ReceivedMessage(fields) {
+                //{"Case":"ReceivedMessage","Fields":[{"fromUserId":"idiot","toUserId":"moron4","message":"This guy"}]}
+                var data = fields[0];
+                var conversationId = conversations.indexOf(data.fromUserId) + 1;
+                if (conversationId == 0)
+                {
+                    conversationId = openConversation(data.fromUserId);
+                }
+
+                var ta = $('#textarea-' + conversationId);
+                ta.val(function (i, text) {
+                    return text + data.message + "\r\n";
+                });
+                ta.scrollTop(ta[0].scrollHeight);
+                var audio = getAudio();
+                audio.play();
+
+            }
+
+            function AddOrRemoveUser(action, fields) {
+                //{"Case":"AddUser","Fields":[{"sessionId":"7c47158d-fc74-4565-bf7a-d73516384988","handle":"idiot"}]}
+                //{"Case":"DeleteUser","Fields":["idiot"]}
+                
+                var getUser = function() {
+                    switch (action)
+                    {
+                        case "add":
+                            return fields[0].handle;
+                        case "delete":
+                            return fields[0];
+                    }
+                }
+
+                var handle = getUser();                               
+
+                if (action == "add") {
+                    var cList = $('#user-list');
+                    addUser(handle).appendTo(cList);
+                }
+                else
+                {
+                    $('#user-' + handle).remove();
+                }
+                    
+            }
+
+            function HandleError(fields) {
+                //{"Case":"Error","Fields":["handle moron already exists"]}
+                alert("ERROR: " + fields[0])
+            }
+
+            ws.onmessage = function (evt) {
+                console.log(evt);
+                $('#output').val(function (i, text) {
+                    return text + evt.data + "\r\n";
+                });
+
+                var data = JSON.parse(evt.data);
+
+                var getFunc = function () {
+                    switch (data.Case) {
+                        case "OK":
+                            return OK;
+                        case "Error":
+                            return HandleError;
+                        case "Data":
+                            return Data;
+                        case "ReceivedMessage":
+                            return ReceivedMessage;
+                        case "AddUser":
+                            return function (fields) {
+                                return AddOrRemoveUser('add', fields);
+                            }
+                        case "DeleteUser":
+                            return function (fields) {
+                                return AddOrRemoveUser('delete', fields);
+                            }
+                    }
+                }
+
+                var func = getFunc();
+                if (func != null)
+                    func(data.Fields);
+            }            
+            
+            function send() {              
+                var value = $('#testinput').val();
+                ws.send(value);
+              return true;
+            }
+
+            function login() {
+                loginCalled = true;                
+                var value = $('#handle').val();
+                loginHandle = value;
+                var request = { Case: "Login", Fields: [value] };
+                ws.send(JSON.stringify(request))
+                $('#conversations').removeClass('hidden');
+                $('#login').addClass('hidden');
+                fart = createAudio('fart1.wav');
+                beep1 = createAudio('511492__andersmmg__double-beep.wav');
+                beep2 = createAudio('246332__kwahmah-02__five-beeps.wav');
+                horn  = createAudio('26185__fogma__my-car-horn-beep-beep.wav');
+                scream = createAudio('64940__syna-max__wilhelm-scream.wav');
+            }
+
+            function sendMessage(event, conversationId) {
+                var key = event.which || event.keyCode;
+                if (key === 13) {
+                    console.log(event);
+                    var handle = conversations[conversationId - 1];
+                    var target = event.srcElement || event.target;
+                    var value = $(target).val();
+                    var request = { Case: "SendMessage", Fields: [handle, value] };
+                    ws.send(JSON.stringify(request));
+                    var ta = $('#textarea-' + conversationId);
+                    ta.val(function (i, text) {
+                        return text + "> " + value + "\r\n";
+                    });
+                    ta.scrollTop(ta[0].scrollHeight);
+                    $(target).val("");
+                }                    
+            }
+
+            function openConversation(handle) {
+                var tabs = $('#convo-tabs');
+
+                var id = conversations.indexOf(handle) + 1;
+                if (id == 0) {
+                    id = conversations.push(handle);
+
+                    tabs.append('<li><a href="#tabs-' + id + '">' + handle + '</a></li>');
+
+                    var divs = $('#tabs');
+
+                    $('<div>')
+                        .attr("id", "tabs-" + id)
+                        .append(
+                            $('<div><textarea readonly id="textarea-' + id + '" cols="100" rows="25">[Notice: Remember to validate your metcard before you travel]\r\n</textarea></div>')
+                        ).append(
+                            $('<div>Message:<input type="text" id="message-input-' + id + '" onkeyup="sendMessage(event, ' + id + ')" /> (press enter to send)</div>')
+                        ).appendTo(divs);
+
+
+                    $("#tabs").tabs("refresh");
+                }
+                $("#tabs").tabs("option", "active", id-1);
+
+                return id;
+            }
+
+        </script>
+        <style type="text/css">
+        </style>
+    </head>
+    <body>
+        <div id="login">
+            <input type="text" id="handle" /><button onclick="login()">Login</button>
+        </div>
+        <div id="main">
+            <div id="left-sidebar">
+                <img src="insanity.png" /><h1 style="color:blue;font-style:italic">INTERCHAT</h1>
+                <h3>Online Users</h3>
+                Click on user to open conversation
+                <ul id="user-list">
+                </ul>
+            </div>
+            <div id="conversations" class="hidden">
+                <h1>Conversations</h1>
+                Notification noise: <input type="radio" name="noise" value="beep1" checked />  Beep 1 <input type="radio" name="noise" value="beep2" /> Beep 2 <input type="radio" name="noise" value="horn" /> Car Horn <input type="radio" name="noise" value="fart" /> Fart <input type="radio" name="noise" value="scream" /> Scream
+                <div id="tabs">
+                    <ul id="convo-tabs">
+                    </ul>
+                </div>
+            </div>
+            <div>
+                <div>Server Status:<span id="serverStatus"></span></div>
+                <div><span id="serverError"></span></div>
+            </div>
+            <div class="hidden">
+
+                <div>
+                    <textarea id="output" cols="100" rows="25"></textarea>
+                </div>
+                <div>
+                    Message:
+                    <input type="text" id="messageInput" onkeyup="sendMessage(event)" />
+                </div>
+                <div>
+                    Test input:
+                    <input type="text" id="testinput" />
+                    <button onclick="send()">Send!</button>
+                </div>
+                <div>
+                    {"Case":"GetUserList"}<br />
+                    {"Case":"Login","Fields":["moron"]}
+                </div>
+            </div>
+        </div>
+        <script>
+            $("#tabs").tabs();
+
+            $("#dialog").dialog({
+                autoOpen: false,
+                width: 400,
+                buttons: [
+                    {
+                        text: "Cancel",
+                        click: function () {
+                            $(this).dialog("close");
+                        }
+                    }
+                ]
+            });
+
+            // Link to open the dialog
+            $("#new-conversation").click(function (event) {
+                $("#dialog").dialog("open");
+                event.preventDefault();
+            });
+        </script>
+    </body>
+</html>
